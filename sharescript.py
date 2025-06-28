@@ -17,7 +17,7 @@ from flask_socketio import SocketIO, emit
 import signal
 import sys
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.config['SECRET_KEY'] = 'your-secret-key-here'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
@@ -58,7 +58,7 @@ HTML_TEMPLATE = """
 <head>
     <title>Shared Terminal - foobar.sh Runner</title>
     <meta charset="utf-8">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/xterm/4.19.0/xterm.min.css" />
+    <link rel="stylesheet" href="/static/css/xterm.min.css" />
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -175,9 +175,9 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/4.19.0/xterm.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/4.19.0/addons/fit/fit.min.js"></script>
+    <script src="/static/js/socket.io.js"></script>
+    <script src="/static/js/xterm.min.js"></script>
+    <script src="/static/js/fit.min.js"></script>
     <script>
         // Initialize xterm.js terminal
         const terminal = new Terminal({
@@ -559,11 +559,30 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 if __name__ == '__main__':
+    # Check if static files exist
+    required_files = [
+        'static/js/socket.io.js',
+        'static/js/xterm.min.js', 
+        'static/js/fit.min.js',
+        'static/css/xterm.min.css'
+    ]
+    
+    missing_files = [f for f in required_files if not os.path.exists(f)]
+    
+    if missing_files:
+        print("WARNING: Missing static files:")
+        for f in missing_files:
+            print(f"  - {f}")
+        print("\nPlease run './download_deps.sh' first to download required JavaScript libraries.")
+        print("This ensures we don't use external CDN bandwidth.")
+        sys.exit(1)
+    
     # Set up signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
     print("Starting Shared Terminal Web Service with Full Terminal Emulation...")
+    print("Using local static files (no external CDN dependencies)")
     print("Open your browser to http://localhost:5100")
     print("Press Ctrl+C to stop the server")
     
