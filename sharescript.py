@@ -11,8 +11,8 @@ import subprocess
 import threading
 import time
 from datetime import datetime
-from flask import Flask, render_template_string
-from flask_socketio import SocketIO, emit, request as socketio_request
+from flask import Flask, render_template_string, request
+from flask_socketio import SocketIO, emit
 import signal
 import sys
 
@@ -297,13 +297,13 @@ def index():
 
 @socketio.on('connect')
 def handle_connect():
-    print(f"Client connected: {socketio_request.sid}")
+    print(f"Client connected: {request.sid}")
     # Send current button state
     emit('button_state', {'disabled': terminal_state.is_running})
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    print(f"Client disconnected: {socketio_request.sid}")
+    print(f"Client disconnected: {request.sid}")
 
 @socketio.on('request_state')
 def handle_request_state():
@@ -504,8 +504,8 @@ if __name__ == '__main__':
     signal.signal(signal.SIGTERM, signal_handler)
     
     print("Starting Shared Terminal Web Service...")
-    print("Open your browser to http://localhost:5000")
+    print("Open your browser to http://localhost:5100")
     print("Press Ctrl+C to stop the server")
     
     # Run the Flask-SocketIO app
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+    socketio.run(app, host='0.0.0.0', port=5100, debug=False)
