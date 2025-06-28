@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Shared Terminal Web Service
-A simple HTTP service that provides a shared terminal interface for running scripts.
+Shared Terminal Web Service with Full Terminal Emulation
+A service that provides a shared terminal interface with proper ANSI handling.
 """
 
 import os
@@ -10,6 +10,7 @@ import select
 import subprocess
 import threading
 import time
+import base64
 from datetime import datetime
 from flask import Flask, render_template_string, request
 from flask_socketio import SocketIO, emit
@@ -24,49 +25,50 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 class TerminalState:
     def __init__(self):
         self.is_running = False
-        self.output_buffer = []
         self.process = None
         self.master_fd = None
         self.lock = threading.Lock()
+        # Store raw terminal data for proper terminal emulation
+        self.terminal_data = b''
         
-    def add_output(self, data):
+    def add_data(self, data):
+        """Add raw terminal data (bytes)"""
         with self.lock:
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            self.output_buffer.append({
-                'timestamp': timestamp,
-                'data': data
-            })
-            # Keep only last 10000 lines to prevent memory issues
-            if len(self.output_buffer) > 10000:
-                self.output_buffer = self.output_buffer[-10000:]
+            self.terminal_data += data
+            # Keep only last 1MB to prevent memory issues
+            if len(self.terminal_data) > 1024 * 1024:
+                # Keep last 512KB
+                self.terminal_data = self.terminal_data[-512*1024:]
     
-    def get_full_output(self):
+    def get_terminal_data(self):
+        """Get all terminal data as base64 for transmission"""
         with self.lock:
-            return self.output_buffer.copy()
+            return base64.b64encode(self.terminal_data).decode('ascii')
     
-    def clear_output(self):
+    def clear_data(self):
         with self.lock:
-            self.output_buffer.clear()
+            self.terminal_data = b''
 
 terminal_state = TerminalState()
 
-# HTML template
+# HTML template with xterm.js
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
     <title>Shared Terminal - foobar.sh Runner</title>
     <meta charset="utf-8">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/xterm/4.19.0/xterm.min.css" />
     <style>
         body {
-            font-family: 'Courier New', monospace;
+            font-family: Arial, sans-serif;
             margin: 0;
             padding: 20px;
             background-color: #1e1e1e;
             color: #ffffff;
         }
         .container {
-            max-width: 1200px;
+            max-width: 1400px;
             margin: 0 auto;
         }
         h1 {
@@ -119,25 +121,11 @@ HTML_TEMPLATE = """
             background-color: #4CAF50;
             color: #fff;
         }
-        .terminal {
+        .terminal-container {
             background-color: #000000;
-            color: #00ff00;
-            padding: 20px;
+            padding: 10px;
             border-radius: 4px;
-            height: 600px;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
             border: 2px solid #333;
-        }
-        .terminal-line {
-            margin: 0;
-            line-height: 1.2;
-        }
-        .timestamp {
-            color: #888;
-            margin-right: 10px;
         }
         .connection-status {
             position: fixed;
@@ -155,14 +143,25 @@ HTML_TEMPLATE = """
             background-color: #f44336;
             color: white;
         }
+        .info {
+            background-color: #2196F3;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 </head>
 <body>
     <div class="connection-status" id="connectionStatus">Connecting...</div>
     
     <div class="container">
         <h1>Shared Terminal - foobar.sh Runner</h1>
+        
+        <div class="info">
+            <strong>Full Terminal Emulation:</strong> This terminal properly handles ANSI colors, cursor movements, 
+            and complex terminal applications like vim, tmux, etc. Everyone sees the same terminal state in real-time.
+        </div>
         
         <div class="controls">
             <button id="runBtn" class="btn btn-primary">Run foobar.sh</button>
@@ -171,24 +170,78 @@ HTML_TEMPLATE = """
         
         <div id="status" class="status idle">Ready to run</div>
         
-        <div id="terminal" class="terminal">
-            <div class="terminal-line">Shared terminal ready. Click "Run foobar.sh" to start the script.</div>
-            <div class="terminal-line">Anyone can view this terminal, even if they join while the script is running.</div>
+        <div class="terminal-container">
+            <div id="terminal"></div>
         </div>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/4.19.0/xterm.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/4.19.0/addons/fit/fit.min.js"></script>
     <script>
+        // Initialize xterm.js terminal
+        const terminal = new Terminal({
+            cursorBlink: true,
+            theme: {
+                background: '#000000',
+                foreground: '#ffffff',
+                cursor: '#ffffff',
+                selection: '#ffffff40',
+                black: '#000000',
+                red: '#ff5555',
+                green: '#50fa7b',
+                yellow: '#f1fa8c',
+                blue: '#bd93f9',
+                magenta: '#ff79c6',
+                cyan: '#8be9fd',
+                white: '#bfbfbf',
+                brightBlack: '#4d4d4d',
+                brightRed: '#ff6e67',
+                brightGreen: '#5af78e',
+                brightYellow: '#f4f99d',
+                brightBlue: '#caa9fa',
+                brightMagenta: '#ff92d0',
+                brightCyan: '#9aedfe',
+                brightWhite: '#e6e6e6'
+            },
+            fontFamily: 'Consolas, "Liberation Mono", Menlo, Courier, monospace',
+            fontSize: 14,
+            rows: 30,
+            cols: 120,
+            scrollback: 10000
+        });
+
+        // Fit addon for responsive terminal sizing
+        const fitAddon = new FitAddon.FitAddon();
+        terminal.loadAddon(fitAddon);
+        
+        // Open terminal in the container
+        terminal.open(document.getElementById('terminal'));
+        fitAddon.fit();
+
+        // Socket.IO setup
         const socket = io();
-        const terminal = document.getElementById('terminal');
         const runBtn = document.getElementById('runBtn');
         const clearBtn = document.getElementById('clearBtn');
         const status = document.getElementById('status');
         const connectionStatus = document.getElementById('connectionStatus');
 
+        // Initial welcome message
+        terminal.writeln('\x1b[32mShared Terminal Ready\x1b[0m');
+        terminal.writeln('Click "Run foobar.sh" to start the script.');
+        terminal.writeln('This terminal supports full ANSI colors and terminal applications.');
+        terminal.writeln('');
+
+        // Resize terminal when window resizes
+        window.addEventListener('resize', () => {
+            fitAddon.fit();
+        });
+
         // Connection status
         socket.on('connect', function() {
             connectionStatus.textContent = 'Connected';
             connectionStatus.className = 'connection-status connected';
+            socket.emit('request_state');
         });
 
         socket.on('disconnect', function() {
@@ -220,47 +273,36 @@ HTML_TEMPLATE = """
             status.textContent = 'Ready to run';
         });
 
-        socket.on('terminal_output', function(data) {
-            const line = document.createElement('div');
-            line.className = 'terminal-line';
-            
-            const timestamp = document.createElement('span');
-            timestamp.className = 'timestamp';
-            timestamp.textContent = data.timestamp;
-            
-            const content = document.createElement('span');
-            content.innerHTML = escapeHtml(data.data);
-            
-            line.appendChild(timestamp);
-            line.appendChild(content);
-            terminal.appendChild(line);
-            
-            // Auto-scroll to bottom
-            terminal.scrollTop = terminal.scrollHeight;
+        socket.on('terminal_data', function(data) {
+            // Decode base64 data and write to terminal
+            const binaryString = atob(data.data);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            terminal.write(bytes);
         });
 
         socket.on('terminal_cleared', function() {
-            terminal.innerHTML = '<div class="terminal-line">Terminal cleared.</div>';
+            terminal.clear();
+            terminal.writeln('\x1b[32mTerminal cleared.\x1b[0m');
+            terminal.writeln('');
         });
 
-        socket.on('full_output', function(data) {
-            terminal.innerHTML = '';
-            data.forEach(function(item) {
-                const line = document.createElement('div');
-                line.className = 'terminal-line';
-                
-                const timestamp = document.createElement('span');
-                timestamp.className = 'timestamp';
-                timestamp.textContent = item.timestamp;
-                
-                const content = document.createElement('span');
-                content.innerHTML = escapeHtml(item.data);
-                
-                line.appendChild(timestamp);
-                line.appendChild(content);
-                terminal.appendChild(line);
-            });
-            terminal.scrollTop = terminal.scrollHeight;
+        socket.on('full_terminal_data', function(data) {
+            terminal.clear();
+            if (data.data) {
+                const binaryString = atob(data.data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                terminal.write(bytes);
+            } else {
+                terminal.writeln('\x1b[32mShared Terminal Ready\x1b[0m');
+                terminal.writeln('Click "Run foobar.sh" to start the script.');
+                terminal.writeln('');
+            }
         });
 
         socket.on('button_state', function(data) {
@@ -274,17 +316,6 @@ HTML_TEMPLATE = """
                 status.className = 'status idle';
                 status.textContent = 'Ready to run';
             }
-        });
-
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        // Request current state when connecting
-        socket.on('connect', function() {
-            socket.emit('request_state');
         });
     </script>
 </body>
@@ -307,18 +338,18 @@ def handle_disconnect():
 
 @socketio.on('request_state')
 def handle_request_state():
-    # Send current output buffer to newly connected client
-    output = terminal_state.get_full_output()
-    emit('full_output', output)
+    # Send current terminal data to newly connected client
+    terminal_data = terminal_state.get_terminal_data()
+    emit('full_terminal_data', {'data': terminal_data})
     emit('button_state', {'disabled': terminal_state.is_running})
 
 @socketio.on('run_script')
 def handle_run_script():
     if terminal_state.is_running:
-        emit('terminal_output', {
-            'timestamp': datetime.now().strftime("%H:%M:%S"),
-            'data': 'Script is already running!'
-        })
+        # Send error message through terminal
+        error_msg = '\r\n\x1b[31mScript is already running!\x1b[0m\r\n'
+        error_data = base64.b64encode(error_msg.encode()).decode('ascii')
+        emit('terminal_data', {'data': error_data})
         return
     
     # Start the script in a new thread
@@ -328,11 +359,11 @@ def handle_run_script():
 
 @socketio.on('clear_terminal')
 def handle_clear_terminal():
-    terminal_state.clear_output()
+    terminal_state.clear_data()
     socketio.emit('terminal_cleared')
 
 def run_script_thread():
-    """Run the foobar.sh script in a separate thread with PTY for proper terminal handling."""
+    """Run the foobar.sh script in a separate thread with full PTY support."""
     
     terminal_state.is_running = True
     socketio.emit('script_started')
@@ -342,28 +373,42 @@ def run_script_thread():
         master_fd, slave_fd = pty.openpty()
         terminal_state.master_fd = master_fd
         
-        # Start the script
+        # Set terminal size (important for applications like vim, tmux)
+        os.system(f'stty -F {os.ttyname(slave_fd)} rows 30 cols 120')
+        
         script_path = "./foobar.sh"
         
         # Check if script exists
         if not os.path.exists(script_path):
-            output_msg = f"Error: {script_path} not found. Creating a sample script..."
-            terminal_state.add_output(output_msg)
-            socketio.emit('terminal_output', {
-                'timestamp': datetime.now().strftime("%H:%M:%S"),
-                'data': output_msg
+            start_msg = '\r\n\x1b[33mfoobar.sh not found. Creating sample script...\x1b[0m\r\n'
+            terminal_state.add_data(start_msg.encode())
+            socketio.emit('terminal_data', {
+                'data': base64.b64encode(start_msg.encode()).decode('ascii')
             })
             
             # Create a sample script for demonstration
             create_sample_script()
             
+        # Start message
+        start_msg = f'\r\n\x1b[32m=== Starting {script_path} ===\x1b[0m\r\n'
+        terminal_state.add_data(start_msg.encode())
+        socketio.emit('terminal_data', {
+            'data': base64.b64encode(start_msg.encode()).decode('ascii')
+        })
+        
+        # Set environment variables for proper terminal behavior
+        env = os.environ.copy()
+        env['TERM'] = 'xterm-256color'
+        env['COLUMNS'] = '120'
+        env['LINES'] = '30'
+        
         # Run the script
         process = subprocess.Popen(
             ["/bin/bash", script_path],
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
-            universal_newlines=True,
+            env=env,
             preexec_fn=os.setsid
         )
         
@@ -372,24 +417,21 @@ def run_script_thread():
         # Close slave fd in parent process
         os.close(slave_fd)
         
-        # Read output from master fd
+        # Read output from master fd and broadcast to all clients
         while process.poll() is None:
             try:
                 # Use select to check if data is available
                 ready, _, _ = select.select([master_fd], [], [], 0.1)
                 if ready:
                     try:
-                        data = os.read(master_fd, 1024).decode('utf-8', errors='replace')
+                        data = os.read(master_fd, 4096)  # Read larger chunks
                         if data:
-                            # Split by lines and emit each line
-                            lines = data.splitlines(keepends=True)
-                            for line in lines:
-                                if line.strip():  # Only emit non-empty lines
-                                    terminal_state.add_output(line.rstrip())
-                                    socketio.emit('terminal_output', {
-                                        'timestamp': datetime.now().strftime("%H:%M:%S"),
-                                        'data': line.rstrip()
-                                    })
+                            # Store raw data
+                            terminal_state.add_data(data)
+                            # Send to all connected clients
+                            socketio.emit('terminal_data', {
+                                'data': base64.b64encode(data).decode('ascii')
+                            })
                     except OSError:
                         break
             except select.error:
@@ -400,33 +442,27 @@ def run_script_thread():
         
         # Read any remaining output
         try:
-            remaining_data = os.read(master_fd, 1024).decode('utf-8', errors='replace')
+            remaining_data = os.read(master_fd, 4096)
             if remaining_data:
-                lines = remaining_data.splitlines()
-                for line in lines:
-                    if line.strip():
-                        terminal_state.add_output(line)
-                        socketio.emit('terminal_output', {
-                            'timestamp': datetime.now().strftime("%H:%M:%S"),
-                            'data': line
-                        })
+                terminal_state.add_data(remaining_data)
+                socketio.emit('terminal_data', {
+                    'data': base64.b64encode(remaining_data).decode('ascii')
+                })
         except OSError:
             pass
         
         # Emit completion message
-        completion_msg = f"Script completed with return code: {return_code}"
-        terminal_state.add_output(completion_msg)
-        socketio.emit('terminal_output', {
-            'timestamp': datetime.now().strftime("%H:%M:%S"),
-            'data': completion_msg
+        completion_msg = f'\r\n\x1b[32m=== Script completed with return code: {return_code} ===\x1b[0m\r\n'
+        terminal_state.add_data(completion_msg.encode())
+        socketio.emit('terminal_data', {
+            'data': base64.b64encode(completion_msg.encode()).decode('ascii')
         })
         
     except Exception as e:
-        error_msg = f"Error running script: {str(e)}"
-        terminal_state.add_output(error_msg)
-        socketio.emit('terminal_output', {
-            'timestamp': datetime.now().strftime("%H:%M:%S"),
-            'data': error_msg
+        error_msg = f'\r\n\x1b[31mError running script: {str(e)}\x1b[0m\r\n'
+        terminal_state.add_data(error_msg.encode())
+        socketio.emit('terminal_data', {
+            'data': base64.b64encode(error_msg.encode()).decode('ascii')
         })
     
     finally:
@@ -443,36 +479,61 @@ def run_script_thread():
         socketio.emit('script_finished')
 
 def create_sample_script():
-    """Create a sample foobar.sh script for demonstration."""
+    """Create a sample foobar.sh script with rich terminal features."""
     script_content = '''#!/bin/bash
 
-echo "Starting foobar.sh demo script..."
-echo "This is a sample script that demonstrates terminal output."
+# Enhanced demo script with colors and terminal features
+echo -e "\\033[1;34mStarting foobar.sh demo script...\\033[0m"
+echo -e "This script demonstrates \\033[1;33mfull terminal emulation\\033[0m capabilities."
 echo ""
 
-# Simulate some work with progress
+# Test basic colors
+echo -e "\\033[31mRed text\\033[0m"
+echo -e "\\033[32mGreen text\\033[0m" 
+echo -e "\\033[33mYellow text\\033[0m"
+echo -e "\\033[34mBlue text\\033[0m"
+echo -e "\\033[35mMagenta text\\033[0m"
+echo -e "\\033[36mCyan text\\033[0m"
+echo ""
+
+# Test bold and styling
+echo -e "\\033[1mBold text\\033[0m"
+echo -e "\\033[4mUnderlined text\\033[0m"
+echo -e "\\033[7mReversed text\\033[0m"
+echo ""
+
+# Simulate progress with colors
+echo -e "\\033[1;36mProgress simulation:\\033[0m"
 for i in {1..10}; do
-    echo "Processing step $i/10..."
-    sleep 1
-    
-    # Show some colored output if supported
-    if command -v tput > /dev/null; then
-        echo "$(tput setaf 2)✓ Step $i completed$(tput sgr0)"
-    else
-        echo "✓ Step $i completed"
-    fi
+    echo -ne "\\033[33mProcessing step $i/10...\\033[0m"
+    sleep 0.5
+    echo -e " \\033[1;32m✓ Complete\\033[0m"
 done
 
 echo ""
-echo "Simulating some errors and warnings..."
-echo "WARNING: This is a sample warning message" >&2
-echo "INFO: This is an informational message"
+echo -e "\\033[1;35mTesting cursor movements and clearing...\\033[0m"
+
+# Test some cursor movements
+echo -ne "This text will be overwritten..."
+sleep 1
+echo -ne "\\r\\033[KNew text on the same line!"
+sleep 1
+echo ""
+
+# Test background colors
+echo -e "\\033[41mRed background\\033[0m"
+echo -e "\\033[42mGreen background\\033[0m"
+echo -e "\\033[43mYellow background\\033[0m"
+echo ""
+
+# Simulate some "errors" and warnings with colors
+echo -e "\\033[1;31mERROR: This is a sample error message\\033[0m" >&2
+echo -e "\\033[1;33mWARNING: This is a sample warning message\\033[0m" >&2
+echo -e "\\033[1;36mINFO: This is an informational message\\033[0m"
 
 echo ""
-echo "Final processing..."
-sleep 2
-
-echo "foobar.sh completed successfully!"
+echo -e "\\033[1;32mfoobar.sh completed successfully!\\033[0m"
+echo -e "\\033[2;37m(This terminal now supports vim, tmux, and other complex applications)\\033[0m"
 '''
     
     with open('./foobar.sh', 'w') as f:
@@ -481,11 +542,10 @@ echo "foobar.sh completed successfully!"
     # Make it executable
     os.chmod('./foobar.sh', 0o755)
     
-    msg = "Created sample foobar.sh script."
-    terminal_state.add_output(msg)
-    socketio.emit('terminal_output', {
-        'timestamp': datetime.now().strftime("%H:%M:%S"),
-        'data': msg
+    msg = '\x1b[32mCreated enhanced sample foobar.sh script.\x1b[0m\r\n'
+    terminal_state.add_data(msg.encode())
+    socketio.emit('terminal_data', {
+        'data': base64.b64encode(msg.encode()).decode('ascii')
     })
 
 def signal_handler(sig, frame):
@@ -503,7 +563,7 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    print("Starting Shared Terminal Web Service...")
+    print("Starting Shared Terminal Web Service with Full Terminal Emulation...")
     print("Open your browser to http://localhost:5100")
     print("Press Ctrl+C to stop the server")
     
