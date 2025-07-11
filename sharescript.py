@@ -58,7 +58,7 @@ def index():
         thread = threading.Thread(target=run_script_thread)
         thread.daemon = True
         thread.start()
-    return render_template("index.html")
+    return render_template("index.html", title=CUSTOM_TITLE, header=CUSTOM_HEADER)
 
 @socketio.on('connect')
 def handle_connect():
@@ -215,11 +215,15 @@ def signal_handler(sig, frame):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Shared Terminal Web Service Daemon")
-    parser.add_argument("script", help="Script to run (e.g. foobar.sh)")
+    parser.add_argument("scriptname", help="Script to run (e.g. foobar.sh)")
     parser.add_argument("--port", type=int, default=5100, help="Port to run the server on (default: 5100)")
     parser.add_argument("--run-on-page-load", action="store_true", help="If set, the script will run automatically when a page is loaded")
+    parser.add_argument("--header", type=str, help="Custom header text to display on the UI")
+    parser.add_argument("--title", type=str, help="Custom title text to display in the browser title bar")
     args = parser.parse_args()
-    SCRIPT_PATH = args.script
+    CUSTOM_HEADER = args.header if args.header else "Job Runner"
+    CUSTOM_TITLE = args.title if args.title else f"Shared Terminal - {os.path.basename(args.scriptname)} Runner"
+    SCRIPT_PATH = args.scriptname
     RUN_ON_PAGE_LOAD = args.run_on_page_load
 
     # Set up signal handlers
