@@ -45,7 +45,7 @@ python3 sharescript.py <script-to-run> [options]
 Run a script with a custom header and title:
 
 ```bash
-python3 sharescript.py foobar.sh --port 5200 --header "Office Terminal" --title "Office Job Runner" --run-on-page-load
+python3 sharescript.py foobar.sh --port 5100 --header "Office Terminal" --title "Office Job Runner" --run-on-page-load
 ```
 
 ## Viewing the UI
@@ -53,15 +53,7 @@ python3 sharescript.py foobar.sh --port 5200 --header "Office Terminal" --title 
 After starting the server, open your browser and navigate to:
 
 ```
-http://localhost:<port>
+http://<local_ip>:<port>
 ```
 
-Replace `<port>` with your chosen port (default is 5100).
-
-## Troubleshooting
-
-- Ensure the shell script provided is executable.
-- Check that the required dependencies (Flask and Flask-SocketIO) are installed.
-- For terminal emulation issues, confirm your terminal settings and that your environment supports full ANSI escape codes.
-
-Happy scripting!
+Replace `<local_ip>` with the IP of the machine running the script. Replace <port> with chosen port (default is 5100).
