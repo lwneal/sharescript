@@ -4,6 +4,7 @@ Shared Terminal Web Service with Full Terminal Emulation
 A service that provides a shared terminal interface with proper ANSI handling.
 """
 
+import argparse
 import os
 import pty
 import select
@@ -18,7 +19,6 @@ import signal
 import sys
 
 app = Flask(__name__, static_folder='static', static_url_path='/static')
-app.config['SECRET_KEY'] = 'your-secret-key-here'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Global state
@@ -156,23 +156,18 @@ HTML_TEMPLATE = """
     <div class="connection-status" id="connectionStatus">Connecting...</div>
     
     <div class="container">
-        <h1>Shared Terminal - foobar.sh Runner</h1>
-        
-        <div class="info">
-            <strong>Full Terminal Emulation:</strong> This terminal properly handles ANSI colors, cursor movements, 
-            and complex terminal applications like vim, tmux, etc. Everyone sees the same terminal state in real-time.
-        </div>
+        <h1>Job Runner</h1>
         
         <div class="controls">
-            <button id="runBtn" class="btn btn-primary">Run foobar.sh</button>
+            <button id="runBtn" class="btn btn-primary">Run Job</button>
             <button id="clearBtn" class="btn btn-secondary">Clear Terminal</button>
         </div>
-        
-        <div id="status" class="status idle">Ready to run</div>
         
         <div class="terminal-container">
             <div id="terminal"></div>
         </div>
+        
+        <div id="status" class="status idle">Ready to run</div>
     </div>
 
     <script src="/static/js/socket.io.js"></script>
@@ -228,7 +223,7 @@ HTML_TEMPLATE = """
 
         // Initial welcome message
         terminal.writeln('\x1b[32mShared Terminal Ready\x1b[0m');
-        terminal.writeln('Click "Run foobar.sh" to start the script.');
+        terminal.writeln('Click "Run Script" to start the script.');
         terminal.writeln('This terminal supports full ANSI colors and terminal applications.');
         terminal.writeln('');
 
@@ -268,7 +263,7 @@ HTML_TEMPLATE = """
 
         socket.on('script_finished', function() {
             runBtn.disabled = false;
-            runBtn.textContent = 'Run foobar.sh';
+            runBtn.textContent = 'Run Script';
             status.className = 'status idle';
             status.textContent = 'Ready to run';
         });
@@ -300,7 +295,7 @@ HTML_TEMPLATE = """
                 terminal.write(bytes);
             } else {
                 terminal.writeln('\x1b[32mShared Terminal Ready\x1b[0m');
-                terminal.writeln('Click "Run foobar.sh" to start the script.');
+                terminal.writeln('Click "Run Script" to start the script.');
                 terminal.writeln('');
             }
         });
@@ -312,7 +307,7 @@ HTML_TEMPLATE = """
                 status.className = 'status running';
                 status.textContent = 'Script is running...';
             } else {
-                runBtn.textContent = 'Run foobar.sh';
+                runBtn.textContent = 'Run Script';
                 status.className = 'status idle';
                 status.textContent = 'Ready to run';
             }
@@ -363,7 +358,7 @@ def handle_clear_terminal():
     socketio.emit('terminal_cleared')
 
 def run_script_thread():
-    """Run the foobar.sh script in a separate thread with full PTY support."""
+    """Run the script in a separate thread with full PTY support."""
     
     terminal_state.is_running = True
     socketio.emit('script_started')
@@ -376,7 +371,7 @@ def run_script_thread():
         # Set terminal size (important for applications like vim, tmux)
         os.system(f'stty -F {os.ttyname(slave_fd)} rows 30 cols 120')
         
-        script_path = "./foobar.sh"
+        script_path = ' '.join(sys.argv[1:])
         
         # Check if script exists
         if not os.path.exists(script_path):
@@ -478,75 +473,6 @@ def run_script_thread():
         terminal_state.master_fd = None
         socketio.emit('script_finished')
 
-def create_sample_script():
-    """Create a sample foobar.sh script with rich terminal features."""
-    script_content = '''#!/bin/bash
-
-# Enhanced demo script with colors and terminal features
-echo -e "\\033[1;34mStarting foobar.sh demo script...\\033[0m"
-echo -e "This script demonstrates \\033[1;33mfull terminal emulation\\033[0m capabilities."
-echo ""
-
-# Test basic colors
-echo -e "\\033[31mRed text\\033[0m"
-echo -e "\\033[32mGreen text\\033[0m" 
-echo -e "\\033[33mYellow text\\033[0m"
-echo -e "\\033[34mBlue text\\033[0m"
-echo -e "\\033[35mMagenta text\\033[0m"
-echo -e "\\033[36mCyan text\\033[0m"
-echo ""
-
-# Test bold and styling
-echo -e "\\033[1mBold text\\033[0m"
-echo -e "\\033[4mUnderlined text\\033[0m"
-echo -e "\\033[7mReversed text\\033[0m"
-echo ""
-
-# Simulate progress with colors
-echo -e "\\033[1;36mProgress simulation:\\033[0m"
-for i in {1..10}; do
-    echo -ne "\\033[33mProcessing step $i/10...\\033[0m"
-    sleep 0.5
-    echo -e " \\033[1;32m✓ Complete\\033[0m"
-done
-
-echo ""
-echo -e "\\033[1;35mTesting cursor movements and clearing...\\033[0m"
-
-# Test some cursor movements
-echo -ne "This text will be overwritten..."
-sleep 1
-echo -ne "\\r\\033[KNew text on the same line!"
-sleep 1
-echo ""
-
-# Test background colors
-echo -e "\\033[41mRed background\\033[0m"
-echo -e "\\033[42mGreen background\\033[0m"
-echo -e "\\033[43mYellow background\\033[0m"
-echo ""
-
-# Simulate some "errors" and warnings with colors
-echo -e "\\033[1;31mERROR: This is a sample error message\\033[0m" >&2
-echo -e "\\033[1;33mWARNING: This is a sample warning message\\033[0m" >&2
-echo -e "\\033[1;36mINFO: This is an informational message\\033[0m"
-
-echo ""
-echo -e "\\033[1;32mfoobar.sh completed successfully!\\033[0m"
-echo -e "\\033[2;37m(This terminal now supports vim, tmux, and other complex applications)\\033[0m"
-'''
-    
-    with open('./foobar.sh', 'w') as f:
-        f.write(script_content)
-    
-    # Make it executable
-    os.chmod('./foobar.sh', 0o755)
-    
-    msg = '\x1b[32mCreated enhanced sample foobar.sh script.\x1b[0m\r\n'
-    terminal_state.add_data(msg.encode())
-    socketio.emit('terminal_data', {
-        'data': base64.b64encode(msg.encode()).decode('ascii')
-    })
 
 def signal_handler(sig, frame):
     """Handle shutdown gracefully."""
@@ -558,7 +484,13 @@ def signal_handler(sig, frame):
             pass
     sys.exit(0)
 
+
 if __name__ == '__main__':
+    if '--help' in sys.argv:
+        print("Usage: {} foobar.sh".format(sys.argv[1]))
+        print("Starts a server on 0.0.0.0:5100 where anyone can click a button to run foobar.sh")
+        exit()
+
     # Check if static files exist
     required_files = [
         'static/js/socket.io.js',
@@ -581,9 +513,7 @@ if __name__ == '__main__':
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    print("Starting Shared Terminal Web Service with Full Terminal Emulation...")
-    print("Using local static files (no external CDN dependencies)")
-    print("Open your browser to http://localhost:5100")
+    print("Sharing script {}".format(' '.join(sys.argv[1:])))
     print("Press Ctrl+C to stop the server")
     
     # Run the Flask-SocketIO app
