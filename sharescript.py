@@ -13,7 +13,7 @@ import threading
 import time
 import base64
 from datetime import datetime
-from flask import Flask, render_template_string, request
+from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
 import signal
 import sys
@@ -21,7 +21,6 @@ import sys
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 socketio = SocketIO(app, cors_allowed_origins="*")
 
-# Global state
 class TerminalState:
     def __init__(self):
         self.is_running = False
@@ -50,276 +49,16 @@ class TerminalState:
             self.terminal_data = b''
 
 terminal_state = TerminalState()
-
-# HTML template with xterm.js
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Shared Terminal - foobar.sh Runner</title>
-    <meta charset="utf-8">
-    <link rel="stylesheet" href="/static/css/xterm.min.css" />
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: #1e1e1e;
-            color: #ffffff;
-        }
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-        h1 {
-            color: #4CAF50;
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        .controls {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        .btn {
-            padding: 10px 20px;
-            font-size: 16px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            margin: 0 10px;
-        }
-        .btn-primary {
-            background-color: #4CAF50;
-            color: white;
-        }
-        .btn-primary:hover:not(:disabled) {
-            background-color: #45a049;
-        }
-        .btn-secondary {
-            background-color: #f44336;
-            color: white;
-        }
-        .btn-secondary:hover:not(:disabled) {
-            background-color: #da190b;
-        }
-        .btn:disabled {
-            background-color: #cccccc;
-            color: #666666;
-            cursor: not-allowed;
-        }
-        .status {
-            text-align: center;
-            margin-bottom: 20px;
-            padding: 10px;
-            border-radius: 4px;
-        }
-        .status.running {
-            background-color: #ff9800;
-            color: #000;
-        }
-        .status.idle {
-            background-color: #4CAF50;
-            color: #fff;
-        }
-        .terminal-container {
-            background-color: #000000;
-            padding: 10px;
-            border-radius: 4px;
-            border: 2px solid #333;
-        }
-        .connection-status {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            padding: 5px 10px;
-            border-radius: 4px;
-            font-size: 12px;
-        }
-        .connected {
-            background-color: #4CAF50;
-            color: white;
-        }
-        .disconnected {
-            background-color: #f44336;
-            color: white;
-        }
-        .info {
-            background-color: #2196F3;
-            color: white;
-            padding: 10px;
-            border-radius: 4px;
-            margin-bottom: 20px;
-        }
-    </style>
-</head>
-<body>
-    <div class="connection-status" id="connectionStatus">Connecting...</div>
-    
-    <div class="container">
-        <h1>Job Runner</h1>
-        
-        <div class="controls">
-            <button id="runBtn" class="btn btn-primary">Run Job</button>
-            <button id="clearBtn" class="btn btn-secondary">Clear Terminal</button>
-        </div>
-        
-        <div class="terminal-container">
-            <div id="terminal"></div>
-        </div>
-        
-        <div id="status" class="status idle">Ready to run</div>
-    </div>
-
-    <script src="/static/js/socket.io.js"></script>
-    <script src="/static/js/xterm.min.js"></script>
-    <script src="/static/js/fit.min.js"></script>
-    <script>
-        // Initialize xterm.js terminal
-        const terminal = new Terminal({
-            cursorBlink: true,
-            theme: {
-                background: '#000000',
-                foreground: '#ffffff',
-                cursor: '#ffffff',
-                selection: '#ffffff40',
-                black: '#000000',
-                red: '#ff5555',
-                green: '#50fa7b',
-                yellow: '#f1fa8c',
-                blue: '#bd93f9',
-                magenta: '#ff79c6',
-                cyan: '#8be9fd',
-                white: '#bfbfbf',
-                brightBlack: '#4d4d4d',
-                brightRed: '#ff6e67',
-                brightGreen: '#5af78e',
-                brightYellow: '#f4f99d',
-                brightBlue: '#caa9fa',
-                brightMagenta: '#ff92d0',
-                brightCyan: '#9aedfe',
-                brightWhite: '#e6e6e6'
-            },
-            fontFamily: 'Consolas, "Liberation Mono", Menlo, Courier, monospace',
-            fontSize: 14,
-            rows: 30,
-            cols: 120,
-            scrollback: 10000
-        });
-
-        // Fit addon for responsive terminal sizing
-        const fitAddon = new FitAddon.FitAddon();
-        terminal.loadAddon(fitAddon);
-        
-        // Open terminal in the container
-        terminal.open(document.getElementById('terminal'));
-        fitAddon.fit();
-
-        // Socket.IO setup
-        const socket = io();
-        const runBtn = document.getElementById('runBtn');
-        const clearBtn = document.getElementById('clearBtn');
-        const status = document.getElementById('status');
-        const connectionStatus = document.getElementById('connectionStatus');
-
-        // Initial welcome message
-        terminal.writeln('\x1b[32mShared Terminal Ready\x1b[0m');
-        terminal.writeln('Click "Run Script" to start the script.');
-        terminal.writeln('This terminal supports full ANSI colors and terminal applications.');
-        terminal.writeln('');
-
-        // Resize terminal when window resizes
-        window.addEventListener('resize', () => {
-            fitAddon.fit();
-        });
-
-        // Connection status
-        socket.on('connect', function() {
-            connectionStatus.textContent = 'Connected';
-            connectionStatus.className = 'connection-status connected';
-            socket.emit('request_state');
-        });
-
-        socket.on('disconnect', function() {
-            connectionStatus.textContent = 'Disconnected';
-            connectionStatus.className = 'connection-status disconnected';
-        });
-
-        // Button handlers
-        runBtn.addEventListener('click', function() {
-            socket.emit('run_script');
-        });
-
-        clearBtn.addEventListener('click', function() {
-            socket.emit('clear_terminal');
-        });
-
-        // Socket event handlers
-        socket.on('script_started', function() {
-            runBtn.disabled = true;
-            runBtn.textContent = 'Running...';
-            status.className = 'status running';
-            status.textContent = 'Script is running...';
-        });
-
-        socket.on('script_finished', function() {
-            runBtn.disabled = false;
-            runBtn.textContent = 'Run Script';
-            status.className = 'status idle';
-            status.textContent = 'Ready to run';
-        });
-
-        socket.on('terminal_data', function(data) {
-            // Decode base64 data and write to terminal
-            const binaryString = atob(data.data);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-            terminal.write(bytes);
-        });
-
-        socket.on('terminal_cleared', function() {
-            terminal.clear();
-            terminal.writeln('\x1b[32mTerminal cleared.\x1b[0m');
-            terminal.writeln('');
-        });
-
-        socket.on('full_terminal_data', function(data) {
-            terminal.clear();
-            if (data.data) {
-                const binaryString = atob(data.data);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
-                terminal.write(bytes);
-            } else {
-                terminal.writeln('\x1b[32mShared Terminal Ready\x1b[0m');
-                terminal.writeln('Click "Run Script" to start the script.');
-                terminal.writeln('');
-            }
-        });
-
-        socket.on('button_state', function(data) {
-            runBtn.disabled = data.disabled;
-            if (data.disabled) {
-                runBtn.textContent = 'Running...';
-                status.className = 'status running';
-                status.textContent = 'Script is running...';
-            } else {
-                runBtn.textContent = 'Run Script';
-                status.className = 'status idle';
-                status.textContent = 'Ready to run';
-            }
-        });
-    </script>
-</body>
-</html>
-"""
+SCRIPT_PATH = None
+RUN_ON_PAGE_LOAD = False
 
 @app.route('/')
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    if RUN_ON_PAGE_LOAD and not terminal_state.is_running:
+        thread = threading.Thread(target=run_script_thread)
+        thread.daemon = True
+        thread.start()
+    return render_template("index.html")
 
 @socketio.on('connect')
 def handle_connect():
@@ -371,18 +110,7 @@ def run_script_thread():
         # Set terminal size (important for applications like vim, tmux)
         os.system(f'stty -F {os.ttyname(slave_fd)} rows 30 cols 120')
         
-        script_path = ' '.join(sys.argv[1:])
-        
-        # Check if script exists
-        if not os.path.exists(script_path):
-            start_msg = '\r\n\x1b[33mfoobar.sh not found. Creating sample script...\x1b[0m\r\n'
-            terminal_state.add_data(start_msg.encode())
-            socketio.emit('terminal_data', {
-                'data': base64.b64encode(start_msg.encode()).decode('ascii')
-            })
-            
-            # Create a sample script for demonstration
-            create_sample_script()
+        script_path = SCRIPT_PATH
             
         # Start message
         start_msg = f'\r\n\x1b[32m=== Starting {script_path} ===\x1b[0m\r\n'
@@ -486,35 +214,20 @@ def signal_handler(sig, frame):
 
 
 if __name__ == '__main__':
-    if '--help' in sys.argv:
-        print("Usage: {} foobar.sh".format(sys.argv[1]))
-        print("Starts a server on 0.0.0.0:5100 where anyone can click a button to run foobar.sh")
-        exit()
+    parser = argparse.ArgumentParser(description="Shared Terminal Web Service Daemon")
+    parser.add_argument("script", help="Script to run (e.g. foobar.sh)")
+    parser.add_argument("--port", type=int, default=5100, help="Port to run the server on (default: 5100)")
+    parser.add_argument("--run-on-page-load", action="store_true", help="If set, the script will run automatically when a page is loaded")
+    args = parser.parse_args()
+    SCRIPT_PATH = args.script
+    RUN_ON_PAGE_LOAD = args.run_on_page_load
 
-    # Check if static files exist
-    required_files = [
-        'static/js/socket.io.js',
-        'static/js/xterm.min.js', 
-        'static/js/fit.min.js',
-        'static/css/xterm.min.css'
-    ]
-    
-    missing_files = [f for f in required_files if not os.path.exists(f)]
-    
-    if missing_files:
-        print("WARNING: Missing static files:")
-        for f in missing_files:
-            print(f"  - {f}")
-        print("\nPlease run './download_deps.sh' first to download required JavaScript libraries.")
-        print("This ensures we don't use external CDN bandwidth.")
-        sys.exit(1)
-    
     # Set up signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    print("Sharing script {}".format(' '.join(sys.argv[1:])))
+    print("Sharing script {}".format(SCRIPT_PATH))
     print("Press Ctrl+C to stop the server")
     
-    # Run the Flask-SocketIO app
-    socketio.run(app, host='0.0.0.0', port=5100, debug=False)
+    # Run the Flask-SocketIO app with the specified port
+    socketio.run(app, host='0.0.0.0', port=args.port, debug=False)
